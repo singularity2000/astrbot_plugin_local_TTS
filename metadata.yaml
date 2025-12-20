@@ -1,0 +1,6 @@
+name: astrbot_plugin_local_TTS
+display_name: TTS语音生成插件
+desc: 一个通过本地API（如CosyVoice3）将文本转换为语音的插件，支持多种音色和情绪配置。
+version: 1.0.0
+author: Singularity2000
+repo: https://github.com/Singularity2000/astrbot_plugin_local_TTS

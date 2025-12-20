@@ -1,0 +1,77 @@
+{
+  "tts_provider": {
+    "description": "TTS提供商",
+    "type": "string",
+    "options": ["CosyVoice3 本地部署"],
+    "default": "CosyVoice3 本地部署",
+    "hint": "目前只有“CosyVoice3 本地部署”这一个选项，未来会添加更多。"
+  },
+  "base_setting": {
+    "description": "基础配置",
+    "type": "object",
+    "items": {
+      "api_url": {
+        "description": "API的URL",
+        "type": "string",
+        "default": "http://localhost:9880",
+        "hint": "当前选择的TTS提供商对应的API的URL。"
+      }
+    }
+  },
+  "enabled_sessions": {
+    "description": "启用的会话",
+    "type": "list",
+    "default": [],
+    "hint": "白名单，格式为 'platform:type:id:speaker[:instruct]'。若不填，则在所有会话中启用插件。示例：napcat:GroupMessage:12345678:小妹妹"
+  },
+  "global_speaker": {
+    "description": "全局音色",
+    "type": "string",
+    "default": "",
+    "hint": "作为兜底的默认音色名称，优先级低于“启用的会话”。"
+  },
+  "auto_call_config": {
+    "description": "主动调用配置",
+    "type": "object",
+    "hint": "本插件有一定概率主动将bot本来要发送的文本转成语音发送",
+    "items": {
+      "send_record_probability": {
+        "description": "主动转语音发送的概率",
+        "type": "float",
+        "default": 0.4,
+        "hint": "0~1之间的浮点数。若为0则等价于关闭主动调用。"
+      },
+      "max_resp_text_len": {
+        "description": "文本长度限制",
+        "type": "int",
+        "default": 75,
+        "hint": "超过此长度的文本不会被转成语音发送。"
+      }
+    }
+  },
+  "emotion_config": {
+    "description": "情绪配置",
+    "type": "object",
+    "hint": "基于一定的概率让LLM判断语言的情绪。若“情绪判断概率”大于0，则启用。",
+    "items": {
+      "emotion_llm": {
+        "description": "情绪判断LLM",
+        "type": "string",
+        "_special": "select_provider",
+        "hint": "选择用于判断情绪的LLM提供商。提示词: 判断{…}这句话的情绪，只返回一个词，不要加任何多余说明。"
+      },
+      "emotion_probability": {
+        "description": "情绪判断概率",
+        "type": "float",
+        "default": 0.5,
+        "hint": "使用LLM判断情绪的概率。若为0或负数，则不启用此功能。"
+      }
+    }
+  },
+  "cache_clean_frequency": {
+    "description": "缓存自动清理频率 (分钟)",
+    "type": "int",
+    "default": 0,
+    "hint": "单位为分钟。若输入0或负值，则关闭自动清理。插件重载或重启后生效。"
+  }
+}
