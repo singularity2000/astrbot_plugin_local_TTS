@@ -260,6 +260,10 @@ class LocalTTSPlugin(Star):
         处理TTS指令, 格式: TTS 【instruct】【speaker】...text...
         """
         msg_text = event.get_message_str().strip()
+
+        # 移除指令前缀"TTS"，为正则解析做准备
+        if msg_text.upper().startswith("TTS"):
+            msg_text = msg_text[3:].strip()
         
         override_speaker = None
         override_instruct = None
