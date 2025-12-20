@@ -30,6 +30,12 @@
     "default": "",
     "hint": "作为兜底的默认音色名称，优先级低于“启用的会话”。"
   },
+  "admin_only": {
+    "description": "TTS命令仅允许管理员使用",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后，只有管理员才能使用TTS指令。在白名单会话中，非管理员会收到提示；在非白名单会话中，则静默忽略。"
+  },
   "auto_call_config": {
     "description": "主动调用配置",
     "type": "object",

@@ -34,6 +34,12 @@ class LocalTTSPlugin(Star):
         super().__init__(context)
         self.config = config
         self.auto_clean_task: Optional[asyncio.Task] = None
+        
+        # 从全局配置加载管理员列表
+        bot_config = self.context.get_config()
+        self.admins: List[str] = [str(admin) for admin in bot_config.get("admins_id", [])]
+        self.admin_only: bool = False
+
         self.load_config()
 
     def load_config(self):
@@ -51,6 +57,7 @@ class LocalTTSPlugin(Star):
 
         self.enabled_sessions: list = self.config.get("enabled_sessions", [])
         self.global_speaker: str = self.config.get("global_speaker", "")
+        self.admin_only: bool = self.config.get("admin_only", False)
         self.cache_clean_frequency: int = self.config.get("cache_clean_frequency", 0)
 
         logger.info("本地TTS插件配置已加载。")
@@ -256,6 +263,15 @@ class LocalTTSPlugin(Star):
         """
         处理TTS指令, 格式: TTS 【instruct】【speaker】...text...
         """
+        # 管理员权限检查
+        if self.admin_only and str(event.get_sender_id()) not in self.admins:
+            session_speaker, _ = self._get_session_info(event)
+            # 如果会话在白名单内，则提示无权限
+            if session_speaker != "NOT_FOUND":
+                yield event.plain_result("此命令仅限管理员使用。")
+            # 如果不在白名单，则静默忽略
+            return
+            
         msg_text = event.get_message_str().strip()
 
         # 移除指令前缀"TTS"，为正则解析做准备
