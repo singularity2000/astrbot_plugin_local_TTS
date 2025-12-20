@@ -268,7 +268,8 @@ class LocalTTSPlugin(Star):
             session_speaker, _ = self._get_session_info(event)
             # 如果会话在白名单内，则提示无权限
             if session_speaker != "NOT_FOUND":
-                yield event.plain_result("此命令仅限管理员使用。")
+                # 直接发送消息，而不是yield，以绕过on_decorating_result钩子
+                await event.send(event.plain_result("此命令仅限管理员使用。"))
             # 如果不在白名单，则静默忽略
             return
             
