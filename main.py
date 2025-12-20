@@ -127,7 +127,7 @@ class LocalTTSPlugin(Star):
 
         # 如果遍历完都未找到匹配项
         logger.debug(f"会话 {event_sid} 未在启用的会话列表中找到匹配项。")
-        return (None, None)
+        return ("NOT_FOUND", None)
 
 
     async def _make_tts_request(self, text: str, speaker: str, instruct: Optional[str]) -> Optional[bytes]:
@@ -179,19 +179,16 @@ class LocalTTSPlugin(Star):
         """
         session_speaker, session_instruct = self._get_session_info(event)
 
-        if session_speaker is None and override_speaker is None and not self.global_speaker:
-             # 如果会话不在白名单，且没有强制指定音色，则忽略
-            if self.enabled_sessions:
-                 return None 
-            # 如果白名单为空但全局音色也为空
-            else:
-                 logger.warning(f"当前会话 {event.unified_msg_origin} 未配置音色，且未设置全局音色。 ")
-                 return "no_speaker"
+        # 核心授权检查：如果会话不在白名单中，则静默退出。
+        if session_speaker == "NOT_FOUND":
+            logger.debug(f"会话 {event.unified_msg_origin} 不在启用的会话白名单中，TTS指令或自动调用被忽略。")
+            return None
 
-
-        final_speaker = override_speaker or session_speaker
+        # 确定最终使用的音色。优先级：指令强制 > 会话配置 > 全局配置
+        final_speaker = override_speaker or session_speaker or self.global_speaker
         if not final_speaker:
-            logger.warning(f"当前会话 {event.unified_msg_origin} 未找到可用音色。")
+            # 此情况发生于：会话在白名单内但未指定音色，且全局音色也为空。
+            logger.warning(f"当前会话 {event.unified_msg_origin} 未找到可用音色（指令、会话、全局均未配置）。")
             return "no_speaker"
 
         # 组合指令: 指令强制 > 会话配置
@@ -290,24 +287,15 @@ class LocalTTSPlugin(Star):
             event, text_part, override_speaker=override_speaker, override_instruct=override_instruct
         )
 
-        if save_path_or_error:
-            if save_path_or_error == "no_speaker":
-                yield event.plain_result("TTS失败，当前会话未配置音色或配置有误，详情查看日志。")
-            elif save_path_or_error == "api_fail":
-                yield event.plain_result("TTS失败，音色配置或API有误，详情查看日志。")
-            else:
-                yield event.chain_result([Record.fromFileSystem(save_path_or_error)])
+        if save_path_or_error == "no_speaker":
+            yield event.plain_result("TTS失败，当前会话未配置音色或配置有误，详情查看日志。")
+        elif save_path_or_error == "api_fail":
+            yield event.plain_result("TTS失败，音色配置或API有误，详情查看日志。")
+        elif save_path_or_error:
+            yield event.chain_result([Record.fromFileSystem(save_path_or_error)])
         else:
-            # 如果_generate_speech返回None，意味着会话不在白名单中，此时不应作出反应。
-            # 只有在它是命令调用时，我们才应该给出反馈。
-            # 检查会话是否在白名单内
-             session_speaker, _ = self._get_session_info(event)
-             if session_speaker is None and self.enabled_sessions:
-                 #  明确不在白名单中，不响应
-                 return
-             else:
-                 # 其他未知错误
-                 yield event.plain_result("TTS失败，发生未知错误，详情查看日志。")
+            # 如果 save_path_or_error 为 None，则说明会话不在白名单。
+            logger.info(f"收到来自会话 {event.unified_msg_origin} 的TTS指令，但该会话不在白名单内，已静默处理。")
 
     @filter.command("TTS清理")
     async def on_clean_cache_command(self, event: AstrMessageEvent):
