@@ -58,6 +58,7 @@ class LocalTTSPlugin(Star):
         self.enabled_sessions: list = self.config.get("enabled_sessions", [])
         self.global_speaker: str = self.config.get("global_speaker", "")
         self.admin_only: bool = self.config.get("admin_only", False)
+        self.only_llm_response: bool = self.config.get("only_llm_response", False)
         self.cache_clean_frequency: int = self.config.get("cache_clean_frequency", 0)
 
         logger.info("本地TTS插件配置已加载。")
@@ -225,7 +226,7 @@ class LocalTTSPlugin(Star):
             return "api_fail"
 
         # --- 保存音频文件 ---
-        sanitized_text = re.sub(r'[\\/*?:\"<>|]', "", text)[:20]
+        sanitized_text = re.sub(r'[\\/*?:"<>|\x00-\x1f]', "", text)[:20]
         file_name = f"{event.get_session_id()}_{final_speaker}_{sanitized_text}.wav"
         save_path = SAVED_AUDIO_DIR / file_name
         
@@ -238,9 +239,17 @@ class LocalTTSPlugin(Star):
             logger.error(f"保存语音文件失败: {e}")
             return None
 
+    @filter.on_llm_response()
+    async def on_llm_resp(self, event: AstrMessageEvent, resp: LLMResponse):
+        """标记当前事件为 LLM 回复"""
+        setattr(event, "_is_llm_out", True)
+
     @filter.on_decorating_result()
     async def on_decorating_result(self, event: AstrMessageEvent):
         """根据概率将发出的文本转为语音"""
+        if self.only_llm_response and not getattr(event, "_is_llm_out", False):
+            return
+
         if self.send_record_probability <= 0 or random.random() > self.send_record_probability:
             return
 
