@@ -37,7 +37,7 @@
     "hint": "开启后，只有管理员才能使用TTS指令。在白名单会话中，非管理员会收到提示；在非白名单会话中，则静默忽略。"
   },
   "only_llm_response": {
-    "description": "TTS命令仅对LLM回复生效",
+    "description": "TTS仅对LLM回复生效",
     "type": "bool",
     "default": false,
     "hint": "开启后，只有由大模型（LLM）生成的回复才会触发自动转语音。插件内置提示、指令回复等将保持文本形式。"
