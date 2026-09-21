@@ -1,84 +1,288 @@
 {
   "tts_provider": {
-    "description": "TTS提供商",
-    "type": "string",
-    "options": ["CosyVoice3 本地部署"],
-    "default": "CosyVoice3 本地部署",
-    "hint": "目前只有“CosyVoice3 本地部署”这一个选项，未来会添加更多。"
-  },
-  "base_setting": {
-    "description": "基础配置",
-    "type": "object",
-    "items": {
-      "api_url": {
-        "description": "API的URL",
-        "type": "string",
-        "default": "http://localhost:9880",
-        "hint": "当前选择的TTS提供商对应的API的URL。"
-      }
-    }
-  },
-  "enabled_sessions": {
-    "description": "启用的会话",
-    "type": "list",
-    "default": [],
-    "hint": "白名单，格式为 'platform:type:id:speaker[:instruct]'。若不填，则在所有会话中启用插件。示例：napcat:GroupMessage:12345678:小妹妹"
-  },
-  "global_speaker": {
-    "description": "全局音色",
+    "description": "全局 TTS 提供商",
     "type": "string",
     "default": "",
-    "hint": "作为兜底的默认音色名称，优先级低于“启用的会话”。"
+    "hint": "先添加并保存提供商，再重新打开设置选择。仅调用最终选中的一个，不失败切换；会话可独立指定。",
+    "options": [
+      ""
+    ],
+    "labels": [
+      ""
+    ]
+  },
+  "providers": {
+    "description": "提供商列表",
+    "type": "template_list",
+    "default": [],
+    "hint": "可添加多个。更名不影响引用；删除被引用项后须重新选择全局/会话提供商。禁止在 URL 中放置敏感凭据；本插件面向受信任的本地服务。",
+    "templates": {
+      "custom": {
+        "name": "自定义 GET 接口",
+        "items": {
+          "id": {
+            "description": "内部标识",
+            "type": "string",
+            "default": "",
+            "invisible": true
+          },
+          "name": {
+            "description": "提供商名称",
+            "type": "string",
+            "default": "BreezeTTS-2",
+            "hint": "自定义且不能重名。保存后重新打开设置，顶部和会话下拉框会显示已保存的名称。"
+          },
+          "url": {
+            "description": "GET 请求 URL 模板",
+            "type": "text",
+            "default": "http://localhost:7865/api?text={text}&speed=1.0&speaker={speaker}&seed=-1&cfg=1&instruct={instruct}",
+            "hint": "只在 ? 后的参数值中使用占位符，例如 text={text}。必须包含 {text}。固定值中的 &、#、+ 等请先做 URL 编码；占位符的实际值由插件自动编码。接口须直接返回音频。"
+          },
+          "timeout": {
+            "description": "请求超时（秒）",
+            "type": "int",
+            "default": 60,
+            "hint": "1～600 秒；LLM 调用另有 15 秒超时。"
+          }
+        }
+      }
+    }
+  },
+  "text_placeholder": {
+    "description": "内置文本占位符（不可修改）",
+    "type": "string",
+    "default": "{text}",
+    "hint": "始终代表实际交给 TTS 的原文。不能添加同名项，也不能被会话或命令覆盖。",
+    "readonly": true
+  },
+  "placeholders": {
+    "description": "全局占位符",
+    "type": "template_list",
+    "default": [
+      {
+        "__template_key": "fixed",
+        "name": "{speaker}",
+        "value": ""
+      },
+      {
+        "__template_key": "llm",
+        "name": "{instruct}",
+        "prompt": "判断{text}这句话的情绪，只返回一个词，不要加任何多余说明",
+        "probability": 0.5,
+        "fallback": ""
+      },
+      {
+        "__template_key": "random",
+        "name": "{random}",
+        "mode": "integer",
+        "minimum": "0",
+        "maximum": "10000",
+        "precision": 2
+      }
+    ],
+    "hint": "模板中先定义值的来源，再在提供商 URL 使用对应名称。未使用的项不会调用 LLM 或生成随机数；同名项不能重复。",
+    "templates": {
+      "fixed": {
+        "name": "固定文本",
+        "items": {
+          "name": {
+            "description": "占位符名称",
+            "type": "string",
+            "default": "{speaker}",
+            "hint": "支持中文，例如 {人物}。不可重复，不能使用保留名称 {text}。"
+          },
+          "value": {
+            "description": "固定值",
+            "type": "text",
+            "default": "",
+            "hint": "留空表示无值，省略使用它的整个请求参数；非空按普通文本发送，不再解释为模板。"
+          }
+        }
+      },
+      "llm": {
+        "name": "LLM 生成文本",
+        "items": {
+          "name": {
+            "description": "占位符名称",
+            "type": "string",
+            "default": "{instruct}",
+            "hint": "支持中文，例如 {情感}。"
+          },
+          "prompt": {
+            "description": "生成提示词",
+            "type": "text",
+            "default": "判断{text}这句话的情绪，只返回一个词，不要加任何多余说明",
+            "hint": "只支持引用 {text}；不读取主会话历史。仅在 URL 用到且没有被会话/命令覆盖时调用。"
+          },
+          "probability": {
+            "description": "调用概率",
+            "type": "float",
+            "default": 0.5,
+            "hint": "0 不调用；1 每次调用；每个占位符独立抽样，同一次生成只求值一次。",
+            "slider": {
+              "min": 0,
+              "max": 1,
+              "step": 0.01
+            }
+          },
+          "fallback": {
+            "description": "备用值",
+            "type": "text",
+            "default": "",
+            "hint": "未触发、没有可用 LLM、调用失败或空/过长输出时使用。留空则省略整个对应请求参数，不发送空字段。"
+          }
+        }
+      },
+      "random": {
+        "name": "范围内随机数",
+        "items": {
+          "name": {
+            "description": "占位符名称",
+            "type": "string",
+            "default": "{random}",
+            "hint": "例如用于 seed={random}。"
+          },
+          "mode": {
+            "description": "数值类型",
+            "type": "string",
+            "default": "integer",
+            "options": [
+              "integer",
+              "decimal"
+            ],
+            "labels": [
+              "整数",
+              "小数"
+            ]
+          },
+          "minimum": {
+            "description": "最小值（含）",
+            "type": "string",
+            "default": "0",
+            "hint": "整数模式需填写整数；范围绝对值不超过 10¹²。"
+          },
+          "maximum": {
+            "description": "最大值（含）",
+            "type": "string",
+            "default": "10000",
+            "hint": "不得小于最小值。小数按精度可表示的数值等概率抽样。"
+          },
+          "precision": {
+            "description": "小数位数",
+            "type": "int",
+            "default": 2,
+            "hint": "0～8；只在小数模式生效。",
+            "condition": {
+              "mode": "decimal"
+            }
+          }
+        }
+      }
+    }
+  },
+  "sessions": {
+    "description": "启用的会话",
+    "type": "template_list",
+    "default": [],
+    "hint": "列表为空：全部会话启用并用全局设置。列表非空：仅列出的 SID 启用。单条模板的 SID 为空不匹配任何会话。完整 SID 精确匹配，不能重复。",
+    "templates": {
+      "session": {
+        "name": "会话组",
+        "items": {
+          "sids": {
+            "description": "会话 SID 列表",
+            "type": "list",
+            "default": [],
+            "hint": "每项一个完整 SID，例如 napcat:GroupMessage:123456。可通过 AstrBot 的 /sid 命令获取（以主程序实际命令为准）。"
+          },
+          "remark": {
+            "description": "会话备注",
+            "type": "string",
+            "default": "",
+            "hint": "仅用于识别这一组会话。"
+          },
+          "provider": {
+            "description": "本组提供商",
+            "type": "string",
+            "default": "",
+            "hint": "读取已保存的提供商名称，保存后重新打开设置刷新。",
+            "options": [
+              ""
+            ],
+            "labels": [
+              "跟随全局设置"
+            ]
+          },
+          "overrides": {
+            "description": "占位符覆盖",
+            "type": "list",
+            "default": [],
+            "hint": "每项填写 {人物}=男孩；按第一个等号分隔。列表留空继承全局。{情感}= 表示明确无值，省略对应参数；输错但未被 URL 使用的名称静默无效。不可覆盖 {text}。"
+          },
+          "probability": {
+            "description": "主动转换概率（可留空）",
+            "type": "string",
+            "default": "",
+            "hint": "留空跟随全局；0～1，0 明确关闭本组自动转换。"
+          },
+          "max_length": {
+            "description": "文本长度上限（可留空）",
+            "type": "string",
+            "default": "",
+            "hint": "留空跟随全局；1～100000 的整数，仅限制自动转换。"
+          }
+        }
+      }
+    }
   },
   "admin_only": {
-    "description": "TTS命令仅允许管理员使用",
+    "description": "TTS 命令仅允许管理员使用",
     "type": "bool",
     "default": false,
-    "hint": "开启后，只有管理员才能使用TTS指令。在白名单会话中，非管理员会收到提示；在非白名单会话中，则静默忽略。"
+    "hint": "统一控制 TTS、TTS帮助、TTS提供商、TTS切换、TTS原文、TTS清理。关闭后普通用户也可修改全局设置、清理缓存。开启后，非管理员在启用会话获无权限提示，其余会话静默。",
+    "obvious_hint": true
   },
   "only_llm_response": {
-    "description": "TTS仅对LLM回复生效",
+    "description": "自动转换仅对 LLM 回复生效",
+    "type": "bool",
+    "default": true,
+    "hint": "无论此开关状态如何，仅转换单个纯文本消息；混合图片/引用/多段消息不处理。插件自身管理回复永不转换。"
+  },
+  "append_text": {
+    "description": "语音后附原文",
     "type": "bool",
     "default": false,
-    "hint": "开启后，只有由大模型（LLM）生成的回复才会触发自动转语音。插件内置提示、指令回复等将保持文本形式。"
+    "hint": "仅对自动转换生效；先发语音，等待 0.5 秒后单独发送原文。手动 TTS 成功只返回语音，失败返回错误提示。"
   },
   "auto_call_config": {
-    "description": "主动调用配置",
+    "description": "主动调用配置（全局）",
     "type": "object",
-    "hint": "本插件有一定概率主动将bot本来要发送的文本转成语音发送",
     "items": {
       "send_record_probability": {
-        "description": "主动转语音发送的概率",
+        "description": "主动转换概率",
         "type": "float",
-        "default": 0.4,
-        "hint": "0~1之间的浮点数。若为0则等价于关闭主动调用。"
+        "default": 0.8,
+        "hint": "0～1；0 关闭自动转换，不影响手动 TTS。",
+        "slider": {
+          "min": 0,
+          "max": 1,
+          "step": 0.01
+        }
       },
       "max_resp_text_len": {
-        "description": "文本长度限制",
+        "description": "文本长度上限",
         "type": "int",
         "default": 75,
-        "hint": "超过此长度的文本不会被转成语音发送。"
+        "hint": "1～100000；只限制自动转换，以字符数计。"
       }
     }
   },
-  "emotion_config": {
-    "description": "情绪配置",
-    "type": "object",
-    "hint": "基于一定的概率让LLM判断语言的情绪。若“情绪判断概率”大于0，则启用。",
-    "items": {
-      "emotion_llm": {
-        "description": "情绪判断LLM",
-        "type": "string",
-        "_special": "select_provider",
-        "hint": "选择用于判断情绪的LLM提供商。提示词: 判断{…}这句话的情绪，只返回一个词，不要加任何多余说明。"
-      },
-      "emotion_probability": {
-        "description": "情绪判断概率",
-        "type": "float",
-        "default": 0.5,
-        "hint": "使用LLM判断情绪的概率。若为0或负数，则不启用此功能。"
-      }
-    }
+  "builtin_llm": {
+    "description": "插件内置 LLM",
+    "type": "string",
+    "default": "",
+    "hint": "所有 LLM 占位符共用此模型。留空则使用备用值或省略参数；不自动改用主对话模型。",
+    "_special": "select_provider"
   },
   "cache_management": {
     "description": "缓存管理",
