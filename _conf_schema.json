@@ -80,10 +80,29 @@
       }
     }
   },
-  "cache_clean_frequency": {
-    "description": "缓存自动清理频率 (分钟)",
-    "type": "int",
-    "default": 0,
-    "hint": "单位为分钟。若输入0或负值，则关闭自动清理。插件重载或重启后生效。"
+  "cache_management": {
+    "description": "缓存管理",
+    "type": "object",
+    "hint": "任意限制超出时优先清理最旧文件；三项均留空则关闭自动清理。重载或重启插件后生效。",
+    "items": {
+      "max_age_hours": {
+        "description": "缓存最长保留时间（小时）",
+        "type": "string",
+        "default": "",
+        "hint": "正数，可填小数；留空不限制。按文件最后修改时间计算。 不接受 0、负数或其他无效值；配置错误时暂停自动清理。"
+      },
+      "max_size_mb": {
+        "description": "缓存总大小上限（MB）",
+        "type": "string",
+        "default": "",
+        "hint": "正数，可填小数；留空不限制。1 MB = 1024 × 1024 字节。 不接受 0、负数或其他无效值；配置错误时暂停自动清理。"
+      },
+      "max_files": {
+        "description": "缓存文件数量上限（个）",
+        "type": "string",
+        "default": "",
+        "hint": "正整数；留空不限制。 不接受 0、负数或其他无效值；配置错误时暂停自动清理。"
+      }
+    }
   }
 }
