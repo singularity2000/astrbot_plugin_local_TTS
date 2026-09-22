@@ -5,10 +5,16 @@ import re
 import stat
 import time
 from pathlib import Path
-from typing import Tuple
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
+
+
+def format_size(size_bytes: int) -> str:
+    """Use the same binary units as the cache capacity setting."""
+    if size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.2f} KB"
+    return f"{size_bytes / (1024 * 1024):.2f} MB"
 
 
 class AudioCache:
@@ -61,7 +67,7 @@ class AudioCache:
         self._release_audio(path)
         self._run_cache_cleanup("发送后")
 
-    def clean(self) -> tuple[int, float, int]:
+    def clean(self) -> tuple[int, int, int]:
         return self._clean_cache(force=True, trigger="手动命令")
 
     async def close(self) -> None:
@@ -120,15 +126,15 @@ class AudioCache:
             return False
         return True
 
-    def _clean_cache(self, force: bool = False, trigger: str = "检查") -> Tuple[int, float, int]:
-        """按约束淘汰；force 手动清空。返回成功删除数、MB、在用跳过数。
+    def _clean_cache(self, force: bool = False, trigger: str = "检查") -> tuple[int, int, int]:
+        """按约束淘汰；force 手动清空。返回成功删除数、字节、在用跳过数。
 
         扫描、写入和保护登记均在事件循环中同步执行且不 await，避免清理相互穿插。
         """
         if not force and not self.cache_auto_enabled:
-            return 0, 0.0, 0
+            return 0, 0, 0
         if not self._cache_directory_safe():
-            return 0, 0.0, 0
+            return 0, 0, 0
         files = []
         try:
             for path in self.directory.iterdir():
@@ -141,14 +147,14 @@ class AudioCache:
                 except OSError:
                     # 不能完整统计时，不据此做破坏性清理。
                     self._warn("无法读取缓存文件信息，本轮清理已跳过。")
-                    return 0, 0.0, 0
+                    return 0, 0, 0
         except FileNotFoundError:
             if force:
-                logger.info("[TTS/缓存] 清理完成 | 原因=手动命令 | 删除=0个/0.00MB")
-            return 0, 0.0, 0
+                logger.info("[TTS/缓存] 清理完成 | 原因=手动命令 | 删除=0个/0.00 KB")
+            return 0, 0, 0
         except OSError:
             self._warn("无法扫描缓存目录，本轮清理已跳过。")
-            return 0, 0.0, 0
+            return 0, 0, 0
 
         files.sort(key=lambda entry: (entry[1].st_mtime, entry[0].name))
         remaining_count = len(files)
@@ -209,9 +215,9 @@ class AudioCache:
             now_mono = time.monotonic()
             if count or force or now_mono - self._deferred_at >= 300:
                 status = "部分暂缓" if deferred else "清理完成"
-                logger.info(f"[TTS/缓存] {status} | 检查={trigger} | 原因={'、'.join(reasons)} | 删除={count}个/{removed_bytes / (1024 * 1024):.2f}MB | 在用跳过={skipped}个")
+                logger.info(f"[TTS/缓存] {status} | 检查={trigger} | 原因={'、'.join(reasons)} | 删除={count}个/{format_size(removed_bytes)} | 在用跳过={skipped}个")
                 self._deferred_at = now_mono
-        return count, removed_bytes / (1024 * 1024), skipped
+        return count, removed_bytes, skipped
 
     def _run_cache_cleanup(self, trigger: str = "检查") -> None:
         if not self._terminated:

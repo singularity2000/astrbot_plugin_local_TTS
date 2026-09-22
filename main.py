@@ -11,16 +11,16 @@ from astrbot.api.provider import LLMResponse
 from astrbot.api.star import Context, Star, StarTools, register
 import astrbot.api.message_components as Comp
 
-from .audio_cache import AudioCache
+from .audio_cache import AudioCache, format_size
 from .configuration import Settings, prepare_schema
-from .delivery import Delivery, PENDING_KEY
+from .delivery import Delivery
 from .request_template import ConfigError, parse_command
 from .tts_client import TTSError
 
 
 @register("astrbot_plugin_local_TTS", "Singularity2000",
           "通过 GET 请求模板与占位符连接本地 TTS，支持会话覆盖和内置 LLM。",
-          "2.0.0", "https://github.com/Singularity2000/astrbot_plugin_local_TTS")
+          "2.1.0", "https://github.com/Singularity2000/astrbot_plugin_local_TTS")
 class LocalTTSPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -55,6 +55,8 @@ class LocalTTSPlugin(Star):
         try:
             self.settings = Settings(self.config)
             self.config_error = ""
+            if self.settings.duplicate_sids:
+                logger.warning(f"[TTS/配置] 发现{self.settings.duplicate_sids}处重复SID，按从上到下首个匹配组生效；调整组顺序会改变设置。")
             selected = self.settings.providers.get(self.settings.selected)
             logger.info(f"[TTS/配置] 已加载 | 提供商={len(self.settings.providers)}个 | 全局={'已选择' if selected else '未选择'} | 自动概率={self.settings.probability:g} | 仅LLM={self.settings.only_llm}")
         except ConfigError as exc:
@@ -82,21 +84,35 @@ class LocalTTSPlugin(Star):
         message = event.get_message_str().strip()
         return message[len(command):].lstrip()
 
+    def _commit_settings(self, candidate: dict) -> None:
+        """Caller holds _config_lock; publish only a successfully saved snapshot."""
+        settings = Settings(candidate)
+        previous = copy.deepcopy(dict(self.config))
+        try:
+            self.config.save_config(candidate)
+        except Exception:
+            self.config.clear()
+            self.config.update(previous)
+            raise ConfigError("保存配置失败，当前运行设置未改变。") from None
+        self.settings = settings
+
     async def _save_option(self, key: str, value: str | bool) -> None:
         async with self._config_lock:
             candidate = copy.deepcopy(dict(self.config))
             candidate[key] = value
-            settings = Settings(candidate)
-            previous = copy.deepcopy(dict(self.config))
-            try:
-                self.config.save_config(candidate)
-            except Exception:
-                self.config.clear()
-                self.config.update(previous)
-                raise ConfigError("保存配置失败，当前运行设置未改变。") from None
-            self.settings = settings
+            self._commit_settings(candidate)
             action = "全局提供商已切换" if key == "tts_provider" else f"语音后附原文={'开启' if value else '关闭'}"
             logger.info(f"[TTS/命令] {action} | 已保存")
+
+    async def _save_group_original(self, sid: str, value: str) -> None:
+        async with self._config_lock:
+            candidate = copy.deepcopy(dict(self.config))
+            group = Settings(candidate).sessions.get(sid)
+            if group is None:
+                raise ConfigError("本会话没有所属会话组，请先在插件设置中配置；未修改全局设置。")
+            candidate["sessions"][group.index]["append_text"] = value
+            self._commit_settings(candidate)
+            logger.info(f"[TTS/命令] 第{group.index + 1}组附原文设置已保存")
 
     @filter.on_llm_response()
     async def on_llm_resp(self, event: AstrMessageEvent, resp: LLMResponse) -> None:
@@ -105,7 +121,8 @@ class LocalTTSPlugin(Star):
     @filter.on_decorating_result()
     async def on_decorating_result(self, event: AstrMessageEvent) -> None:
         settings = self.settings
-        if settings is None or self.delivery is None or event.get_extra("local_tts_control", False):
+        delivery = self.delivery
+        if settings is None or delivery is None or event.get_extra("local_tts_control", False):
             return
         if settings.only_llm and not event.get_extra("local_tts_llm_response", False):
             logger.debug("[TTS/跳过] 非LLM回复")
@@ -125,24 +142,12 @@ class LocalTTSPlugin(Star):
             return
         trace = uuid4().hex[:8]
         try:
-            prepared = await self.delivery.prepare(event, settings, effective, text, {}, True, trace)
-            result.chain[:] = [prepared.record]
+            prepared = await delivery.prepare(event, settings, effective, text, {}, True, trace)
+            await delivery.send_automatic(event, prepared, result)
         except (ConfigError, TTSError) as exc:
-            logger.warning(f"[TTS/失败][{trace}] 自动生成：{exc}；保留原文")
+            logger.warning(f"[TTS/失败][{trace}] 自动转换：{exc}；原回复交由主框架处理")
         except Exception:
-            logger.warning(f"[TTS/失败][{trace}] 自动生成：内部错误，保留原文")
-
-    @filter.after_message_sent()
-    async def after_message_sent(self, event: AstrMessageEvent) -> None:
-        prepared = event.get_extra(PENDING_KEY)
-        if prepared is None or not prepared.automatic or prepared.finished:
-            return
-        try:
-            await self.delivery.send_automatic_text(event, prepared)
-        except Exception:
-            logger.warning(f"[TTS/发送][{prepared.trace}] 原文处理失败，已跳过")
-        finally:
-            self.delivery.finish(event, prepared)
+            logger.warning(f"[TTS/失败][{trace}] 自动转换：内部错误，原回复交由主框架处理")
 
     @filter.command("TTS")
     async def on_tts_command(self, event: AstrMessageEvent) -> AsyncIterator[MessageEventResult]:
@@ -243,6 +248,40 @@ class LocalTTSPlugin(Star):
             return
         yield self._reply(event, "语音后附原文：" + ("开启" if self.settings.append_text else "关闭") + "（全局，仅自动转换）")
 
+    @filter.command("TTS本组原文")
+    async def group_original_command(self, event: AstrMessageEvent) -> AsyncIterator[MessageEventResult]:
+        """查看本组原文设置；AstrBot管理员可开启、关闭或恢复跟随全局。"""
+        allowed, message = self._command_gate(event)
+        if not allowed:
+            if message:
+                yield self._reply(event, message)
+            return
+        action = self._body(event, "TTS本组原文").strip()
+        actions = {"开启": "on", "关闭": "off", "跟随": "inherit"}
+        if action not in {"", "状态", *actions}:
+            yield self._reply(event, "用法：TTS本组原文 开启 / 关闭 / 跟随 / 状态")
+            return
+        if action in actions and not event.is_admin():
+            yield self._reply(event, "修改整个会话组仅限 AstrBot 管理员，QQ群管理员不等同于 AstrBot 管理员。")
+            return
+        sid = event.unified_msg_origin
+        if sid not in self.settings.sessions:
+            yield self._reply(event, "本会话没有所属会话组，请先在插件设置中配置；未修改全局设置。")
+            return
+        if action in actions:
+            try:
+                await self._save_group_original(sid, actions[action])
+            except ConfigError as exc:
+                yield self._reply(event, str(exc))
+                return
+        effective = self.settings.effective(sid)
+        count = sum(g.index == effective.group_index for g in self.settings.sessions.values())
+        from .help_text import short
+        group_name = (short(effective.remark) + "（" if effective.remark else "") + f"第{effective.group_index + 1}组" + ("）" if effective.remark else "")
+        state = "开启" if effective.append_text else "关闭"
+        source = "本组指定" if effective.append_text_override else "跟随全局"
+        yield self._reply(event, f"会话组：{group_name}\n语音后附原文：{state}（{source}，仅自动转换）\n影响本组 {count} 个生效会话。" + ("已保存。" if action in actions else ""))
+
     @filter.command("TTS清理")
     async def clean_command(self, event: AstrMessageEvent) -> AsyncIterator[MessageEventResult]:
         """清理音频缓存，跳过正在使用的文件。"""
@@ -255,7 +294,7 @@ class LocalTTSPlugin(Star):
             yield self._reply(event, "缓存尚未初始化。")
             return
         count, size, skipped = self.cache.clean()
-        yield self._reply(event, f"已清理 {count} 个文件，共 {size:.2f} MB；跳过 {skipped} 个在用文件。")
+        yield self._reply(event, f"已清理 {count} 个文件，共 {format_size(size)}；跳过 {skipped} 个在用文件。")
 
     @filter.command("TTS帮助")
     async def help_command(self, event: AstrMessageEvent) -> AsyncIterator[MessageEventResult]:
@@ -266,7 +305,26 @@ class LocalTTSPlugin(Star):
                 yield self._reply(event, message)
             return
         from .help_text import build_help
-        yield self._reply(event, build_help(self.settings, event.unified_msg_origin))
+        action = self._body(event, "TTS帮助").strip()
+        if action not in {"", "详细"}:
+            yield self._reply(event, "用法：TTS帮助 或 TTS帮助 详细")
+            return
+        config = self.context.get_config(umo=event.unified_msg_origin)
+        prefixes = config.get("wake_prefix", [])
+        prefix = next((p for p in prefixes if isinstance(p, str) and p), "") if isinstance(prefixes, list) else ""
+        llm_model = None
+        if self.settings.llm_id and self.settings.effective(event.unified_msg_origin).enabled:
+            try:
+                provider = self.context.get_provider_by_id(self.settings.llm_id)
+                model = provider.get_model() if provider is not None else None
+                if isinstance(model, str) and model.strip():
+                    llm_model = model.strip()
+            except Exception:
+                # Display a safe fallback; never expose provider errors or configuration.
+                pass
+        yield self._reply(event, build_help(self.settings, event.unified_msg_origin,
+                                          detailed=action == "详细", prefix=prefix,
+                                          llm_model=llm_model))
 
     async def terminate(self) -> None:
         if self.delivery:

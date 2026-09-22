@@ -1,11 +1,11 @@
-"""Prepare audio; let AstrBot send it and observe only this event's own Record."""
+"""Generate audio; preserve automatic text until the voice send succeeds."""
 import asyncio
 import json
 from dataclasses import dataclass
 from pathlib import Path
 
 from astrbot.api import logger
-from astrbot.api.event import AstrMessageEvent
+from astrbot.api.event import AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context
 import astrbot.api.message_components as Comp
 
@@ -39,7 +39,7 @@ class Delivery:
         self.context = context
         self.cache = cache
         self.client = TTSClient()
-        self.limit = asyncio.Semaphore(2)
+        self._limits: dict[str, asyncio.Semaphore] = {}
         self._active = set()
         self._pending = {}
         self._closed = False
@@ -54,7 +54,12 @@ class Delivery:
         self._active.add(task)
         path = None
         try:
-            async with self.limit:
+            if effective.provider is None:
+                raise ConfigError("尚未选择提供商，请在插件设置中选择并保存。")
+            limit = self._limits.get(effective.provider.id)
+            if limit is None:
+                limit = self._limits[effective.provider.id] = asyncio.Semaphore(effective.provider.concurrency)
+            async with limit:
                 logger.debug(f"[TTS/生成][{trace}] 开始 | 来源={'自动' if automatic else '命令'} | 字数={len(text)}")
                 values = await resolve(settings, effective, text, overrides, self.context, trace)
                 params = effective.provider.request.render(values)
@@ -64,9 +69,10 @@ class Delivery:
                     record = Comp.Record.fromFileSystem(str(path))
                 except OSError:
                     raise TTSError("无法保存音频缓存，请检查插件数据目录权限。") from None
-                prepared = PreparedAudio(trace, path, record, text, settings.append_text and automatic, automatic)
+                prepared = PreparedAudio(trace, path, record, text, effective.append_text and automatic, automatic)
                 prepared.parameter_changes = log_parameter_changes(effective.provider.request, values)
-                self._observe(event, prepared)
+                if not automatic:
+                    self._observe(event, prepared)
                 return prepared
         except BaseException:
             if path is not None:
@@ -111,8 +117,8 @@ class Delivery:
                 return result
             except Exception:
                 prepared.error = "语音发送失败，请检查平台适配器和音频格式。"
-                logger.warning(f"[TTS/发送][{prepared.trace}] 语音发送失败 | {'恢复原文' if prepared.automatic else '返回命令错误提示'}")
-                # Handled after framework sending: automatic fallback or command yield.
+                logger.warning(f"[TTS/发送][{prepared.trace}] 语音发送失败 | 返回命令错误提示")
+                # The manual command yields its error after framework sending.
             finally:
                 restore()
 
@@ -140,25 +146,31 @@ class Delivery:
         except Exception:
             logger.warning(f"[TTS/缓存][{prepared.trace}] 释放或清理失败，已跳过")
 
-    async def send_automatic_text(self, event: AstrMessageEvent, prepared: PreparedAudio) -> None:
-        """Hooks cannot yield. Send the follow-up with the session's quote setting."""
-        if prepared.sent:
-            if not prepared.append_text:
-                return
-            await asyncio.sleep(ORIGINAL_DELAY)
-        elif not prepared.error:
-            # Another plugin discarded/replaced the audio: don't inject unexpected text.
-            logger.debug(f"[TTS/发送][{prepared.trace}] 语音未被发送，跳过附带原文")
-            return
-        result = event.plain_result(prepared.text)
-        config = self.context.get_config(umo=event.unified_msg_origin)
-        if config.get("platform_settings", {}).get("reply_with_quote", False):
-            result.chain.insert(0, Comp.Reply(id=event.message_obj.message_id))
+    async def send_automatic(self, event: AstrMessageEvent, prepared: PreparedAudio, result: MessageEventResult) -> None:
+        """Try voice before framework decoration; never reconstruct or resend text.
+
+        On failure, the original result (including metadata) remains untouched.
+        Only successful voice delivery may suppress its original text chain.
+        """
+        task = asyncio.current_task()
+        self._active.add(task)
         try:
-            await event.send(result)
-            logger.info(f"[TTS/发送][{prepared.trace}] {'原文发送成功 | 间隔≥0.5s' if prepared.sent else '失败回退原文已发送'}")
-        except Exception:
-            logger.warning(f"[TTS/发送][{prepared.trace}] {'附带原文' if prepared.sent else '回退原文'}发送失败，不重发语音")
+            if self._closed:
+                raise TTSError("插件正在停止，请稍后重试。")
+            try:
+                await event.send(event.chain_result([prepared.record]))
+            except Exception:
+                raise TTSError("语音发送失败，原回复继续交由主框架处理。") from None
+            prepared.sent = True
+            logger.info(f"[TTS/发送][{prepared.trace}] 语音发送成功 | 来源=自动 | 内容={json.dumps(prepared.text, ensure_ascii=False)}{prepared.parameter_changes}")
+            if prepared.append_text:
+                await asyncio.sleep(ORIGINAL_DELAY)
+                logger.debug(f"[TTS/发送][{prepared.trace}] 原回复交由主框架处理 | 间隔≥0.5s")
+            else:
+                result.chain.clear()
+        finally:
+            self._active.discard(task)
+            self.finish(event, prepared)
 
     async def close(self) -> None:
         self._closed = True

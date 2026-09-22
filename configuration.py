@@ -66,6 +66,7 @@ class Provider:
     name: str
     request: RequestTemplate
     timeout: float
+    concurrency: int = 1
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,22 @@ class EffectiveSettings:
     max_length: int
     probability_override: bool = False
     length_override: bool = False
+    append_text: bool = False
+    append_text_override: bool = False
+    llm_probability: float | None = None
+    group_index: int | None = None
+
+
+@dataclass(frozen=True)
+class SessionGroupSettings:
+    index: int
+    provider: str
+    remark: str
+    overrides: dict[str, str | None]
+    probability: float | None
+    max_length: int | None
+    append_text: str
+    llm_probability: float | None
 
 
 class Settings:
@@ -99,7 +116,8 @@ class Settings:
                 raise ConfigError("未知提供商模板，请通过添加模板创建。")
             request = RequestTemplate.parse(item.get("url", ""))
             self.providers[identifier] = Provider(identifier, name.strip(), request,
-                number(item.get("timeout", 60), "请求超时", 1, 600))
+                number(item.get("timeout", 60), "请求超时", 1, 600),
+                number(item.get("concurrency", 1), "提供商任务并行上限", 1, 64, True))
             names.add(name.strip())
         self.selected = data.get("tts_provider", "")
         if not isinstance(self.selected, str) or self.selected and self.selected not in self.providers:
@@ -159,7 +177,8 @@ class Settings:
         self.sessions = {}
         entries = self._list(data, "sessions")
         self.all_sessions = not entries
-        for item in entries:
+        self.duplicate_sids = 0
+        for index, item in enumerate(entries):
             if item.get("__template_key") != "session":
                 raise ConfigError("未知会话模板。")
             sids = item.get("sids", [])
@@ -170,16 +189,25 @@ class Settings:
                 raise ConfigError("会话引用的提供商已失效，请重新选择或改为跟随全局。")
             overrides = parse_overrides(item.get("overrides", []))
             p, length = item.get("probability", ""), item.get("max_length", "")
-            group = (provider, str(item.get("remark", "")), overrides,
-                     self.probability if blank(p) else number(p, "会话转换概率", 0, 1),
-                     self.max_length if blank(length) else number(length, "会话长度上限", 1, 100000, True),
-                     not blank(p), not blank(length))
+            append = item.get("append_text", "inherit")
+            if append not in ("inherit", "on", "off"):
+                raise ConfigError("本组语音后附原文须为跟随全局、开启或关闭。")
+            llm_p = item.get("llm_probability", "")
+            group = SessionGroupSettings(
+                index=index, provider=provider, remark=str(item.get("remark", "")),
+                overrides=overrides,
+                probability=None if blank(p) else number(p, "会话转换概率", 0, 1),
+                max_length=None if blank(length) else number(length, "会话长度上限", 1, 100000, True),
+                append_text=append,
+                llm_probability=None if blank(llm_p) else number(llm_p, "会话LLM赋值调用概率", 0, 1),
+            )
             for sid in sids:
                 sid = sid.strip()
                 if not sid:
                     continue
                 if sid in self.sessions:
-                    raise ConfigError("同一个 SID 不能出现在多个会话条目中或重复填写。")
+                    self.duplicate_sids += 1
+                    continue
                 self.sessions[sid] = group
 
     @staticmethod
@@ -199,8 +227,21 @@ class Settings:
     def effective(self, sid: str) -> EffectiveSettings:
         group = self.sessions.get(sid)
         if group is None:
-            return EffectiveSettings(self.all_sessions, self.providers.get(self.selected), False,
-                                     "", {}, self.probability, self.max_length)
-        provider, remark, overrides, p, length, po, lo = group
-        return EffectiveSettings(True, self.providers.get(provider or self.selected), bool(provider),
-                                 remark, dict(overrides), p, length, po, lo)
+            return EffectiveSettings(
+                enabled=self.all_sessions, provider=self.providers.get(self.selected),
+                provider_override=False, remark="", overrides={},
+                probability=self.probability, max_length=self.max_length,
+                append_text=self.append_text,
+            )
+        return EffectiveSettings(
+            enabled=True, provider=self.providers.get(group.provider or self.selected),
+            provider_override=bool(group.provider), remark=group.remark,
+            overrides=dict(group.overrides),
+            probability=self.probability if group.probability is None else group.probability,
+            max_length=self.max_length if group.max_length is None else group.max_length,
+            probability_override=group.probability is not None,
+            length_override=group.max_length is not None,
+            append_text=self.append_text if group.append_text == "inherit" else group.append_text == "on",
+            append_text_override=group.append_text != "inherit",
+            llm_probability=group.llm_probability, group_index=group.index,
+        )

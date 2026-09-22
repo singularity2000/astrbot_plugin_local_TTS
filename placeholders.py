@@ -38,7 +38,8 @@ async def resolve(settings: Settings, effective: EffectiveSettings, text: str,
             values[name] = format(value, f".{precision}f")
         else:
             values[name] = item.get("fallback", "") or None
-            if not settings.llm_id or random.random() >= item["probability"]:
+            probability = item["probability"] if effective.llm_probability is None else effective.llm_probability
+            if not settings.llm_id or random.random() >= probability:
                 logger.debug(f"[TTS/LLM][{trace}] 未调用：未配置模型或未命中概率，使用备用值/省略参数")
                 continue
             try:

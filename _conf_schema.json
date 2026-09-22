@@ -43,6 +43,12 @@
             "type": "int",
             "default": 60,
             "hint": "1～600 秒；LLM 调用另有 15 秒超时。"
+          },
+          "concurrency": {
+            "description": "任务并行上限",
+            "type": "int",
+            "default": 1,
+            "hint": "1～64，默认1为串行；所有使用本提供商的会话共享名额。包含LLM参数生成、TTS请求和缓存落盘，不包含平台消息发送。不同提供商独立计数，即使指向同一个服务；排队不计入请求超时。保存重载后生效。"
           }
         }
       }
@@ -184,7 +190,7 @@
     "description": "启用的会话",
     "type": "template_list",
     "default": [],
-    "hint": "列表为空：全部会话启用并用全局设置。列表非空：仅列出的 SID 启用。单条模板的 SID 为空不匹配任何会话。完整 SID 精确匹配，不能重复。",
+    "hint": "列表为空：全部会话启用并用全局设置。列表非空：仅列出的 SID 启用。单条模板的 SID 为空不匹配任何会话。完整 SID 精确匹配，重复时从上到下仅第一个匹配组生效，整组设置不合并。",
     "templates": {
       "session": {
         "name": "会话组",
@@ -193,7 +199,7 @@
             "description": "会话 SID 列表",
             "type": "list",
             "default": [],
-            "hint": "每项一个完整 SID，例如 napcat:GroupMessage:123456。可通过 AstrBot 的 /sid 命令获取（以主程序实际命令为准）。"
+            "hint": "每项一个完整 SID，例如 napcat:GroupMessage:123456。可通过 AstrBot 的 /sid 命令获取（以主程序实际命令为准）。 重复SID仅采用从上到下第一个匹配组，调整组顺序会改变生效设置。"
           },
           "remark": {
             "description": "会话备注",
@@ -230,6 +236,28 @@
             "type": "string",
             "default": "",
             "hint": "留空跟随全局；1～100000 的整数，仅限制自动转换。"
+          },
+          "append_text": {
+            "description": "语音后附原文",
+            "type": "string",
+            "default": "inherit",
+            "options": [
+              "inherit",
+              "on",
+              "off"
+            ],
+            "labels": [
+              "跟随全局设置",
+              "开启",
+              "关闭"
+            ],
+            "hint": "仅自动转换生效。开启时，语音发送成功至少0.5秒后，原回复继续由主框架处理和发送；手动TTS成功只返回语音。"
+          },
+          "llm_probability": {
+            "description": "LLM赋值调用概率（可留空）",
+            "type": "string",
+            "default": "",
+            "hint": "留空分别跟随全局各LLM占位符的调用概率；填写0～1则统一本组概率，仍各自独立抽样。0不调用，1每次需要时调用。用于辅助LLM生成参数，不是自动转换概率；手动和自动TTS均适用，已直接赋值的参数不调用。"
           }
         }
       }
@@ -252,7 +280,7 @@
     "description": "语音后附原文",
     "type": "bool",
     "default": false,
-    "hint": "仅对自动转换生效；先发语音，等待 0.5 秒后单独发送原文。手动 TTS 成功只返回语音，失败返回错误提示。"
+    "hint": "仅对自动转换生效，可被会话组覆盖。语音发送成功后等待至少0.5秒，再让原回复按主框架的切分、前缀等规则处理和发送。生成或发送报错时保留原回复交给主框架，不另行补发；手动TTS成功只返回语音。"
   },
   "auto_call_config": {
     "description": "主动调用配置（全局）",
