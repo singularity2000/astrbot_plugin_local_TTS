@@ -1,4 +1,4 @@
-"""AstrBot Local TTS 2.0: hooks and commands only; domain logic lives in modules."""
+"""AstrBot Local TTS: hooks, commands and Agent tool orchestration."""
 import asyncio
 import copy
 import random
@@ -18,9 +18,13 @@ from .request_template import ConfigError, parse_command
 from .tts_client import TTSError
 
 
+# Agent 语音工具名称：修改后重载插件生效；AstrBot 会按此名称管理工具启停。
+TTS_TOOL_NAME = "text_to_sound"
+
+
 @register("astrbot_plugin_local_TTS", "Singularity2000",
-          "通过 GET 请求模板与占位符连接本地 TTS，支持会话覆盖和内置 LLM。",
-          "2.1.0", "https://github.com/Singularity2000/astrbot_plugin_local_TTS")
+          "TTS 语音生成插件，支持高度灵活的语音生成参数。",
+          "2.2.0", "https://github.com/Singularity2000/astrbot_plugin_local_TTS")
 class LocalTTSPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -30,6 +34,74 @@ class LocalTTSPlugin(Star):
         self.cache = None
         self.delivery = None
         self._config_lock = asyncio.Lock()
+
+    @filter.llm_tool(name=TTS_TOOL_NAME)
+    async def text_to_sound(self, event: AstrMessageEvent, text: str) -> str:
+        """TTS转换工具，当你需要将一段话用你的声音读出来并发送到当前聊天时使用此工具。
+
+        Args:
+            text(string): 需要转换为语音的完整文本，只填写实际要朗读的内容。
+        """
+        if not isinstance(text, str) or not text.strip():
+            return "语音发送失败：需要提供非空的朗读文本。"
+        settings = self.settings
+        delivery = self.delivery
+        if settings is None or delivery is None:
+            return "语音发送失败：TTS 当前不可用，请检查插件配置。"
+
+        text = text.strip()
+        effective = settings.effective(event.unified_msg_origin)
+        if not effective.enabled:
+            return "语音发送失败：当前会话未启用 TTS。"
+
+        trace = uuid4().hex[:8]
+        prepared = None
+        try:
+            prepared = await delivery.prepare(
+                event,
+                settings,
+                effective,
+                text,
+                {},
+                False,
+                trace,
+                source="Agent",
+            )
+            await delivery.send_tool(event, prepared)
+            return (
+                "语音已成功发送到当前聊天。"
+                "本次朗读内容已经发送，请不要再次朗读同一内容；如有需要可以继续用文字回复。"
+            )
+        except (ConfigError, TTSError) as exc:
+            logger.warning(f"[TTS/失败][{trace}] Agent调用：{exc}")
+            return f"语音发送失败：{exc}"
+        except Exception:
+            logger.warning(f"[TTS/失败][{trace}] Agent调用：内部错误")
+            return "语音发送失败：内部错误，请检查插件日志和 TTS 服务。"
+        finally:
+            if prepared is not None:
+                delivery.finish(event, prepared)
+
+    def _update_agent_tool_schema(self) -> None:
+        """Apply user-configured model-facing text without replacing the framework tool."""
+        if self.settings is None:
+            return
+        tool = self.context.get_llm_tool_manager().get_func(TTS_TOOL_NAME)
+        if tool is None:
+            logger.warning(f"[TTS/配置] 未找到 Agent 工具：{TTS_TOOL_NAME}")
+            return
+        tool.description = self.settings.agent_tool_description
+        tool.parameters = {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": self.settings.agent_tool_text_description,
+                }
+            },
+            "required": ["text"],
+            "additionalProperties": False,
+        }
 
     async def initialize(self) -> None:
         """Use the framework lifecycle; do not start tasks inside __init__."""
@@ -41,6 +113,7 @@ class LocalTTSPlugin(Star):
                 logger.warning("[TTS/配置] " + self.config_error)
                 return
         self._load_settings()
+        self._update_agent_tool_schema()
         try:
             directory = StarTools.get_data_dir("astrbot_plugin_local_TTS") / "audio"
             self.cache = AudioCache(directory, self.config.get("cache_management", {}))
@@ -123,6 +196,9 @@ class LocalTTSPlugin(Star):
         settings = self.settings
         delivery = self.delivery
         if settings is None or delivery is None or event.get_extra("local_tts_control", False):
+            return
+        if event.get_extra("local_tts_agent_voice_attempted", False):
+            logger.debug("[TTS/跳过] 本轮 Agent 已尝试发送语音")
             return
         if settings.only_llm and not event.get_extra("local_tts_llm_response", False):
             logger.debug("[TTS/跳过] 非LLM回复")

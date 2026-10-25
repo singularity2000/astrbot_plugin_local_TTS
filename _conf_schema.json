@@ -305,6 +305,25 @@
       }
     }
   },
+  "agent_tool": {
+    "description": "Agent 语音工具",
+    "type": "object",
+    "hint": "工具名称由代码中的 TTS_TOOL_NAME 决定；工具启用、停用和人格分配由 AstrBot 管理。修改后重载插件生效。",
+    "items": {
+      "description": {
+        "description": "工具调用介绍",
+        "type": "text",
+        "default": "TTS转换工具，当你需要将一段话用你的声音读出来并发送到当前聊天时使用此工具。",
+        "hint": "这段文字会告诉 Agent 什么时候使用语音工具。"
+      },
+      "text_description": {
+        "description": "工具参数说明",
+        "type": "text",
+        "default": "需要转换为语音的完整文本，只填写实际要朗读的内容。",
+        "hint": "这段文字会告诉 Agent 如何填写 text 参数。"
+      }
+    }
+  },
   "builtin_llm": {
     "description": "插件内置 LLM",
     "type": "string",

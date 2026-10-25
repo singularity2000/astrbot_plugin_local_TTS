@@ -168,6 +168,19 @@ class Settings:
             raise ConfigError("主动调用配置格式错误。")
         self.probability = number(auto.get("send_record_probability", .8), "主动转换概率", 0, 1)
         self.max_length = number(auto.get("max_resp_text_len", 75), "自动转换长度上限", 1, 100000, True)
+        agent_tool = data.get("agent_tool", {})
+        if not isinstance(agent_tool, dict):
+            raise ConfigError("Agent 语音工具配置格式错误。")
+        self.agent_tool_description = self._agent_tool_text(
+            agent_tool.get("description"),
+            "工具调用介绍",
+            "TTS转换工具，当你需要将一段话用你的声音读出来并发送到当前聊天时使用此工具。",
+        )
+        self.agent_tool_text_description = self._agent_tool_text(
+            agent_tool.get("text_description"),
+            "工具参数说明",
+            "需要转换为语音的完整文本，只填写实际要朗读的内容。",
+        )
         self.admin_only = self._bool(data, "admin_only", False)
         self.only_llm = self._bool(data, "only_llm_response", True)
         self.append_text = self._bool(data, "append_text", False)
@@ -222,6 +235,20 @@ class Settings:
         value = data.get(key, default)
         if not isinstance(value, bool):
             raise ConfigError(f"{key} 须为开关。")
+        return value
+
+    @staticmethod
+    def _agent_tool_text(value: object, label: str, default: str) -> str:
+        """Validate model-facing tool text while keeping old configs compatible."""
+        if value is None:
+            return default
+        if not isinstance(value, str):
+            raise ConfigError(f"{label}须为文本。")
+        value = value.strip()
+        if not value:
+            return default
+        if len(value) > 4000:
+            raise ConfigError(f"{label}不能超过 4000 个字符。")
         return value
 
     def effective(self, sid: str) -> EffectiveSettings:
