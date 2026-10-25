@@ -69,15 +69,14 @@ class LocalTTSPlugin(Star):
             )
             await delivery.send_tool(event, prepared)
             return (
-                "语音已成功发送到当前聊天。"
-                "本次朗读内容已经发送，请不要再次朗读同一内容；如有需要可以继续用文字回复。"
+                "语音已成功发送到当前聊天。请不要再次朗读同一内容。"
             )
         except (ConfigError, TTSError) as exc:
             logger.warning(f"[TTS/失败][{trace}] Agent调用：{exc}")
             return f"语音发送失败：{exc}"
         except Exception:
             logger.warning(f"[TTS/失败][{trace}] Agent调用：内部错误")
-            return "语音发送失败：内部错误，请检查插件日志和 TTS 服务。"
+            return "语音发送失败：内部错误。"
         finally:
             if prepared is not None:
                 delivery.finish(event, prepared)
