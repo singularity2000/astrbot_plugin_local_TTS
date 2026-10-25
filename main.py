@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, MessageEventResult, ResultContentType, filter
-from astrbot.api.provider import LLMResponse
+from astrbot.api.provider import LLMResponse, ProviderRequest
 from astrbot.api.star import Context, Star, StarTools, register
 import astrbot.api.message_components as Comp
 
@@ -24,7 +24,7 @@ TTS_TOOL_NAME = "text_to_sound"
 
 @register("astrbot_plugin_local_TTS", "Singularity2000",
           "TTS 语音生成插件，支持高度灵活的语音生成参数。",
-          "2.2.0", "https://github.com/Singularity2000/astrbot_plugin_local_TTS")
+          "2.2.1", "https://github.com/Singularity2000/astrbot_plugin_local_TTS")
 class LocalTTSPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -53,6 +53,12 @@ class LocalTTSPlugin(Star):
         effective = settings.effective(event.unified_msg_origin)
         if not effective.enabled:
             return "语音发送失败：当前会话未启用 TTS。"
+        max_length = settings.agent_tool_max_length
+        if max_length is not None and len(text) > max_length:
+            return (
+                f"朗读文本超过 {max_length} 字，本次未生成语音。"
+                "请放弃朗读，或压缩字数重试，或分批多次调用语音工具。"
+            )
 
         trace = uuid4().hex[:8]
         prepared = None
@@ -122,6 +128,18 @@ class LocalTTSPlugin(Star):
             self.config_error = "无法初始化音频缓存，请检查插件数据目录权限。"
             self.settings = None
             logger.warning("[TTS/配置] " + self.config_error)
+
+    @filter.on_llm_request()
+    async def on_llm_request(self, event: AstrMessageEvent, request: ProviderRequest) -> None:
+        """Hide the Agent voice tool from requests whose session has TTS disabled."""
+        settings = self.settings
+        if settings is None or request.func_tool is None:
+            return
+        if settings.effective(event.unified_msg_origin).enabled:
+            return
+        if request.func_tool.get_tool(TTS_TOOL_NAME) is not None:
+            request.func_tool.remove_tool(TTS_TOOL_NAME)
+            logger.debug("[TTS/工具] 当前会话未启用，已从本次 LLM 请求移除 Agent 语音工具")
 
     def _load_settings(self) -> None:
         try:

@@ -321,6 +321,12 @@
         "type": "text",
         "default": "需要转换为语音的完整文本，只填写实际要朗读的内容。",
         "hint": "这段文字会告诉 Agent 如何填写 text 参数。"
+      },
+      "max_length": {
+        "description": "最大朗读字数",
+        "type": "string",
+        "default": "500",
+        "hint": "按字符数计算；留空表示不限制。超限时不请求 TTS，Agent 会收到提示并放弃/压缩/分批重试。"
       }
     }
   },

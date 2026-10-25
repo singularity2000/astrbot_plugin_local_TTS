@@ -181,6 +181,12 @@ class Settings:
             "工具参数说明",
             "需要转换为语音的完整文本，只填写实际要朗读的内容。",
         )
+        self.agent_tool_max_length = self._optional_integer(
+            agent_tool.get("max_length", "500"),
+            "Agent 语音工具最大朗读字数",
+            1,
+            1000000,
+        )
         self.admin_only = self._bool(data, "admin_only", False)
         self.only_llm = self._bool(data, "only_llm_response", True)
         self.append_text = self._bool(data, "append_text", False)
@@ -250,6 +256,17 @@ class Settings:
         if len(value) > 4000:
             raise ConfigError(f"{label}不能超过 4000 个字符。")
         return value
+
+    @staticmethod
+    def _optional_integer(
+        value: object,
+        label: str,
+        minimum: int,
+        maximum: int,
+    ) -> int | None:
+        if value is None or isinstance(value, str) and not value.strip():
+            return None
+        return int(number(value, label, minimum, maximum, integer=True))
 
     def effective(self, sid: str) -> EffectiveSettings:
         group = self.sessions.get(sid)
